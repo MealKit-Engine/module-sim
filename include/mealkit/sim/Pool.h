@@ -2,6 +2,7 @@
 
 #include "mealkit/core/Hash.h"
 #include "mealkit/core/Log.h"
+#include "mealkit/core/Reflect.h"
 
 #include <type_traits>
 #include <vector>
@@ -21,6 +22,7 @@ namespace mealkit::sim {
 // Pool<T> 항목 id. generation 0은 무효(슬롯 세대는 1부터 시작한다).
 template <class T>
 struct Id {
+    static constexpr bool kReflectId = true;
     u32 slot = 0;
     u32 generation = 0;
 
@@ -35,6 +37,8 @@ class Pool {
     enum class Slot : u8 { Free, New, Alive, Dying };
 
 public:
+    using value_type = T;
+
     // 매치 시작 때 한 번. 이전 항목은 모두 사라진다.
     void init(u32 capacity) {
         m_items.assign(capacity, T{});
@@ -141,7 +145,54 @@ public:
     Iterator<const Pool, const T&> begin() const { return {this, 0}; }
     Iterator<const Pool, const T&> end() const { return {this, capacity()}; }
 
+    // 필드 선언(MEALKIT_FIELD)에서 쓰는 설명: 해시, 스냅샷, 에디터 상태 보기
+    static const reflect::ContainerOps& reflectOps() {
+        static const reflect::ContainerOps ops{
+            [](const void* p) { return static_cast<const Pool*>(p)->capacity(); },
+            [](const void* p, u32 slot) {
+                const Slot s = static_cast<const Pool*>(p)->m_slots[slot];
+                return s == Slot::New || s == Slot::Alive;
+            },
+            [](const void* p, u32 slot) -> const void* { return &static_cast<const Pool*>(p)->m_items[slot]; },
+            [](const void* p, u32 slot) { return static_cast<const Pool*>(p)->m_generations[slot]; },
+            [](const void* p, Hasher& h) { static_cast<const Pool*>(p)->hashState(h); },
+            [](const void* p, reflect::ByteWriter& w) { static_cast<const Pool*>(p)->save(w); },
+            [](void* p, reflect::ByteReader& r) { return static_cast<Pool*>(p)->load(r); },
+        };
+        return ops;
+    }
+
 private:
+    template <class V>
+    static void saveVector(const std::vector<V>& v, reflect::ByteWriter& w) {
+        w.value(static_cast<u32>(v.size()));
+        if (!v.empty()) w.bytes(v.data(), v.size() * sizeof(V));
+    }
+    template <class V>
+    static bool loadVector(std::vector<V>& v, reflect::ByteReader& r) {
+        u32 n = 0;
+        if (!r.value(n)) return false;
+        v.resize(n);
+        return n == 0 || r.bytes(v.data(), n * sizeof(V));
+    }
+    void save(reflect::ByteWriter& w) const {
+        w.value(m_count);
+        saveVector(m_items, w);
+        saveVector(m_generations, w);
+        saveVector(m_slots, w);
+        saveVector(m_free, w);
+        saveVector(m_dying, w);
+    }
+    bool load(reflect::ByteReader& r) {
+        // 용량을 미리 잡아 둬서 불러온 뒤에도 틱 도중 할당이 없다
+        if (!r.value(m_count) || !loadVector(m_items, r) || !loadVector(m_generations, r) || !loadVector(m_slots, r) ||
+            !loadVector(m_free, r) || !loadVector(m_dying, r))
+            return false;
+        m_free.reserve(m_items.size());
+        m_dying.reserve(m_items.size());
+        return true;
+    }
+
     bool live(Id<T> id) const {
         return id.valid() && id.slot < capacity() && m_generations[id.slot] == id.generation &&
                (m_slots[id.slot] == Slot::New || m_slots[id.slot] == Slot::Alive);
