@@ -7,7 +7,7 @@
 namespace mealkit::sim {
 
 MEALKIT_STRUCT(TickTimer) {
-    MEALKIT_FIELD(u32, readyTick, 0, "준비되는 틱"); // 이 틱부터 준비됨 (0 = 처음부터 준비)
+    MEALKIT_FIELD(u32, readyTick, 0, "Ready tick"); // 이 틱부터 준비됨 (0 = 처음부터 준비)
 
     void start(u32 now, u32 ticks) { readyTick = now + ticks; }
     bool ready(u32 now) const { return now >= readyTick; }
