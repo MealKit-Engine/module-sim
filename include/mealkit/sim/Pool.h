@@ -52,6 +52,21 @@ public:
         m_count = 0;
     }
 
+    // 매치 중에 용량을 늘린다 (중간 참가로 플레이어가 는다). 새 슬롯은 지금 빈 슬롯을 다 쓴 다음에 쓴다. 모든 피어가 같은 틱에 부른다
+    void grow(u32 capacity) {
+        const u32 old = this->capacity();
+        if (capacity <= old) return;
+        m_items.resize(capacity, T{});
+        m_generations.resize(capacity, 1u);
+        m_slots.resize(capacity, Slot::Free);
+        std::vector<u32> free;
+        free.reserve(capacity);
+        for (u32 i = capacity; i > old; --i) free.push_back(i - 1);
+        free.insert(free.end(), m_free.begin(), m_free.end());
+        m_free = std::move(free);
+        m_dying.reserve(capacity);
+    }
+
     u32 capacity() const { return static_cast<u32>(m_items.size()); }
     u32 count() const { return m_count; } // 쓰는 중인 슬롯 (이번 틱에 만든 것과 지울 것 포함)
 

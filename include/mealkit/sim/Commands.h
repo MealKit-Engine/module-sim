@@ -83,4 +83,33 @@ bool sendCommand(net::LockstepSession& session, const T& command) {
     return session.submitCommand(buffer, sizeof(buffer));
 }
 
+// 엔진 명령: 플레이어가 매치 중에 들어오거나(처음 또는 다시) 끊겼다 (net::kPresenceCommand, 호스트가 보낸다).
+// 모든 피어가 같은 틱에 받는다. 새 슬롯이면 게임이 슬롯·컨트롤러를 만들고, loadout은 그 사람의 매치 시작 데이터(game::setLoadout과 같은 바이트)
+struct Presence {
+    u8 player = 0;
+    bool connected = false;
+    const u8* loadout = nullptr;
+    u32 loadoutSize = 0;
+
+    // 로드아웃을 T로 읽는다 (game::readLoadout과 같은 형식: 타입 해시 4바이트 + 내용)
+    template <class T>
+    bool readLoadout(T& out) const {
+        if (loadoutSize != 4 + sizeof(T)) return false;
+        u32 type = 0;
+        std::memcpy(&type, loadout, 4);
+        if (type != static_cast<u32>(fnv1a(reflect::typeOf<T>().name))) return false;
+        std::memcpy(&out, loadout + 4, sizeof(T));
+        return true;
+    }
+};
+
+inline bool readPresence(const Command& c, Presence& out) {
+    if (c.type != static_cast<u32>(fnv1a(net::kPresenceCommand)) || c.size < 1) return false;
+    out.player = c.player;
+    out.connected = c.data[0] != 0;
+    out.loadout = c.data + 1;
+    out.loadoutSize = c.size - 1;
+    return true;
+}
+
 } // namespace mealkit::sim
