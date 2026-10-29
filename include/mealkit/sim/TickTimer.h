@@ -2,12 +2,12 @@
 
 #include "mealkit/core/Reflect.h"
 
-// "N틱 뒤" 타이머 (docs/CODING_MODEL.md "시간이 걸리는 일"). 실수 시간이나 매 틱 감소 대신 준비되는 틱 번호 하나를 저장한다.
-// 상태가 u32 하나라 해시·스냅샷이 쉽다 (필드 선언이라 상태 구조체에 넣으면 해시·스냅샷에 저절로 들어간다).
+// "After N ticks" timer (docs/CODING_MODEL.md "Things that take time"). Stores one tick number when it becomes ready instead of real time or a per-tick countdown.
+// State is a single u32, so hashing/snapshots are easy (it's a field declaration, so putting it in a state struct includes it in the hash/snapshots automatically).
 namespace mealkit::sim {
 
 MEALKIT_STRUCT(TickTimer) {
-    MEALKIT_FIELD(u32, readyTick, 0, "Ready tick"); // 이 틱부터 준비됨 (0 = 처음부터 준비)
+    MEALKIT_FIELD(u32, readyTick, 0, "Ready tick"); // ready from this tick (0 = ready from the start)
 
     void start(u32 now, u32 ticks) { readyTick = now + ticks; }
     bool ready(u32 now) const { return now >= readyTick; }

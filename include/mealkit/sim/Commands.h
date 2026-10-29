@@ -8,19 +8,19 @@
 #include <cstring>
 #include <type_traits>
 
-// 확정 명령 (docs/CODING_MODEL.md "시뮬레이션에 넣는 입력 외 명령"): 틱 입력(플레이어당 8바이트)과 별도로
-// 가끔 보내는 명령 — 디버그 치트, 매치 중 설정 변경, 투표. 상태를 직접 고치면 다른 피어·그림자 시뮬레이션이 디싱크되므로
-// 화면 쪽(app/, view/)은 명령을 보내기만 하고, 시뮬레이션이 확정된 틱에 처리한다.
+// Confirmed commands (docs/CODING_MODEL.md "Non-input commands into the simulation"): separate from tick input (8 bytes per player),
+// occasionally sent commands — debug cheats, mid-match setting changes, votes. Modifying state directly would desync other peers/the shadow simulation, so
+// the view side (app/, view/) only sends commands, and the simulation processes them on the confirmed tick.
 //
-//   MEALKIT_STRUCT(Shockwave) { MEALKIT_FIELD(u32, power, 1, "세기"); };   // sim/의 명령 타입 (문자열·컨테이너 없음)
-//   sim::sendCommand(ctx.session, Shockwave{});                            // 화면 쪽: 보낸다
-//   sim::forEachCommand(tickInputs, [&](const sim::Command& c) {           // World::step() 맨 앞: 처리한다
+//   MEALKIT_STRUCT(Shockwave) { MEALKIT_FIELD(u32, power, 1, "Power"); };   // command type in sim/ (no strings/containers)
+//   sim::sendCommand(ctx.session, Shockwave{});                            // view side: send
+//   sim::forEachCommand(tickInputs, [&](const sim::Command& c) {           // at the start of World::step(): process
 //       if (Shockwave s; c.read(s)) shockwave(world, c.player, s);
 //   });
 //
-// 호스트가 적용할 틱을 정하고 그 틱의 입력과 함께 모두에게 보낸다. 한 틱 안의 순서는 플레이어 번호 → 보낸 순서.
-// 입력 기록·되감기·그림자 시뮬레이션에 입력과 같이 들어간다. 명령은 memcpy로 보내므로 같은 빌드끼리만 뜻이 같다(락스텝 전제와 같다).
-// 타입은 이름의 해시(4바이트)로 구분한다: 명령 하나는 타입 + 내용이 net::kMaxCommandBytes 이하.
+// The host decides the tick to apply it on and sends it to everyone with that tick's inputs. Order within a tick is player index → send order.
+// They go into input recordings/rewind/shadow simulation together with inputs. Commands are sent via memcpy, so they only mean the same between identical builds (same as the lockstep premise).
+// Types are distinguished by a hash of the name (4 bytes): one command is type + contents up to net::kMaxCommandBytes.
 namespace mealkit::sim {
 
 template <class T>
@@ -37,7 +37,7 @@ u32 commandType() {
 }
 
 struct Command {
-    u8 player = 0; // 보낸 플레이어 슬롯
+    u8 player = 0; // sending player slot
     u32 type = 0;
     const u8* data = nullptr;
     u32 size = 0;
@@ -46,7 +46,7 @@ struct Command {
     bool is() const {
         return type == commandType<T>() && size == sizeof(T);
     }
-    // 이 타입이면 out에 복사하고 true
+    // If it's this type, copies into out and returns true
     template <class T>
     bool read(T& out) const {
         if (!is<T>()) return false;
@@ -55,7 +55,7 @@ struct Command {
     }
 };
 
-// 이 틱의 확정 명령을 차례로: f(const Command&)
+// This tick's confirmed commands in order: f(const Command&)
 template <class F>
 void forEachCommand(const net::TickInputs& inputs, F&& f) {
     net::forEachCommand(inputs, [&](u8 player, const u8* data, u32 size) {
@@ -70,7 +70,7 @@ void forEachCommand(const net::TickInputs& inputs, F&& f) {
     });
 }
 
-// 화면 쪽(app/, view/)이 부른다. 매치 중(Running)이 아니거나 대기열이 차면 false
+// Called by the view side (app/, view/). false if not mid-match (Running) or the queue is full
 template <class T>
 bool sendCommand(net::LockstepSession& session, const T& command) {
     const u32 type = commandType<T>();
@@ -83,15 +83,15 @@ bool sendCommand(net::LockstepSession& session, const T& command) {
     return session.submitCommand(buffer, sizeof(buffer));
 }
 
-// 엔진 명령: 플레이어가 매치 중에 들어오거나(처음 또는 다시) 끊겼다 (net::kPresenceCommand, 호스트가 보낸다).
-// 모든 피어가 같은 틱에 받는다. 새 슬롯이면 게임이 슬롯·컨트롤러를 만들고, loadout은 그 사람의 매치 시작 데이터(game::setLoadout과 같은 바이트)
+// Engine command: a player joined mid-match (first time or again) or disconnected (net::kPresenceCommand, sent by the host).
+// All peers receive it on the same tick. For a new slot the game creates the slot/controller; loadout is that person's match start data (same bytes as game::setLoadout)
 struct Presence {
     u8 player = 0;
     bool connected = false;
     const u8* loadout = nullptr;
     u32 loadoutSize = 0;
 
-    // 로드아웃을 T로 읽는다 (game::readLoadout과 같은 형식: 타입 해시 4바이트 + 내용)
+    // Reads the loadout as T (same format as game::readLoadout: 4-byte type hash + contents)
     template <class T>
     bool readLoadout(T& out) const {
         if (loadoutSize != 4 + sizeof(T)) return false;

@@ -7,19 +7,19 @@
 #include <type_traits>
 #include <vector>
 
-// 시뮬레이션 객체 저장소 (docs/CODING_MODEL.md "생성과 파괴").
+// Simulation object storage (docs/CODING_MODEL.md "Creation and destruction").
 //
-// - 용량은 매치를 시작할 때 init()으로 한 번 정한다. 그 뒤로는 할당하지 않는다(틱 도중 할당 금지).
-// - 생성은 즉시: create()가 돌려준 id로 이번 틱에도 get()할 수 있다. 다만 만든 틱에는 순회(for)에 나오지 않는다.
-// - 삭제는 표시만: destroy() 뒤로는 get()과 순회에서 빠지고, endTick()이 슬롯 순서로 실제로 비운다.
-//   그래서 순회 도중에 만들거나 지워도 안전하고, 같은 틱 안에서 슬롯이 다시 쓰이지 않는다.
-// - id에는 세대 번호가 붙어 있어, 지워진 객체의 id로 get()하면 nullptr이다(슬롯이 다시 쓰여도).
+// - Capacity is set once with init() when a match starts. No allocation after that (no allocation mid-tick).
+// - Creation is immediate: the id returned by create() can be get() in the same tick. But it doesn't appear in iteration (for) on the tick it was created.
+// - Deletion only marks: after destroy() it's excluded from get() and iteration, and endTick() actually clears it in slot order.
+//   So creating or deleting during iteration is safe, and slots aren't reused within the same tick.
+// - ids carry a generation number, so get() with a deleted object's id returns nullptr (even if the slot is reused).
 //
-// 결정론: 순회는 슬롯 번호 순서, 빈 슬롯은 정해진 순서로 다시 쓴다. 슬롯 상태(세대, 빈 슬롯 목록)는 hashState()로
-// World::hash()에 넣고, 항목의 필드는 게임이 직접 하나씩 넣는다(구조체 패딩이 섞이지 않게).
+// Determinism: iteration is in slot order, and empty slots are reused in a fixed order. Slot state (generations, free list) goes into
+// World::hash() via hashState(), and the game adds item fields one by one itself (so struct padding doesn't mix in).
 namespace mealkit::sim {
 
-// Pool<T> 항목 id. generation 0은 무효(슬롯 세대는 1부터 시작한다).
+// Pool<T> item id. generation 0 is invalid (slot generations start at 1).
 template <class T>
 struct Id {
     static constexpr bool kReflectId = true;
@@ -39,20 +39,20 @@ class Pool {
 public:
     using value_type = T;
 
-    // 매치 시작 때 한 번. 이전 항목은 모두 사라진다.
+    // Once at match start. All previous items disappear.
     void init(u32 capacity) {
         m_items.assign(capacity, T{});
         m_generations.assign(capacity, 1u);
         m_slots.assign(capacity, Slot::Free);
         m_free.clear();
         m_free.reserve(capacity);
-        for (u32 i = capacity; i > 0; --i) m_free.push_back(i - 1); // 0번 슬롯부터 쓴다
+        for (u32 i = capacity; i > 0; --i) m_free.push_back(i - 1); // slot 0 is used first
         m_dying.clear();
         m_dying.reserve(capacity);
         m_count = 0;
     }
 
-    // 매치 중에 용량을 늘린다 (중간 참가로 플레이어가 는다). 새 슬롯은 지금 빈 슬롯을 다 쓴 다음에 쓴다. 모든 피어가 같은 틱에 부른다
+    // Grows capacity mid-match (more players from late joins). New slots are used after the current empty slots are used up. All peers call it on the same tick
     void grow(u32 capacity) {
         const u32 old = this->capacity();
         if (capacity <= old) return;
@@ -68,11 +68,11 @@ public:
     }
 
     u32 capacity() const { return static_cast<u32>(m_items.size()); }
-    u32 count() const { return m_count; } // 쓰는 중인 슬롯 (이번 틱에 만든 것과 지울 것 포함)
+    u32 count() const { return m_count; } // slots in use (including ones created this tick and ones to delete)
 
-    // 꽉 찼으면 무효 id를 돌려준다 (모든 피어에서 똑같이 실패한다). 용량을 늘려야 한다는 뜻이라 assert도 건다.
+    // Returns an invalid id when full (fails the same way on all peers). It means capacity should grow, so it also asserts.
     Id<T> create(const T& value = T{}) {
-        MEALKIT_ASSERT(!m_free.empty()); // Pool이 꽉 찼다: World::reset()에서 용량을 늘린다
+        MEALKIT_ASSERT(!m_free.empty()); // the Pool is full: increase capacity in World::reset()
         if (m_free.empty()) return {};
         const u32 slot = m_free.back();
         m_free.pop_back();
@@ -82,7 +82,7 @@ public:
         return {slot, m_generations[slot]};
     }
 
-    // 표시만 한다. 이미 지웠거나 무효인 id는 무시한다.
+    // Only marks. Already deleted or invalid ids are ignored.
     void destroy(Id<T> id) {
         if (!live(id)) return;
         m_slots[id.slot] = Slot::Dying;
@@ -93,8 +93,8 @@ public:
     T* get(Id<T> id) { return live(id) ? &m_items[id.slot] : nullptr; }
     const T* get(Id<T> id) const { return live(id) ? &m_items[id.slot] : nullptr; }
 
-    // 틱 끝에 한 번 (World::step 마지막). 지울 항목을 슬롯 순서로 onDestroy(T&)에 넘긴 뒤 비우고,
-    // 이번 틱에 만든 항목을 다음 틱부터 순회에 넣는다. onDestroy에서는 물리 바디 삭제 같은 정리만 한다.
+    // Once at the end of a tick (end of World::step). Passes items to delete in slot order to onDestroy(T&) and clears them,
+    // and puts items created this tick into iteration from the next tick. onDestroy only does cleanup like deleting physics bodies.
     template <class OnDestroy>
     void endTick(OnDestroy&& onDestroy) {
         if (!m_dying.empty()) {
@@ -116,7 +116,7 @@ public:
         endTick([](T&) {});
     }
 
-    // 슬롯 상태만 넣는다. 항목 필드는 게임이 순회하며 넣는다.
+    // Only slot state is added. Item fields are added by the game while iterating.
     void hashState(Hasher& h) const {
         h.add(capacity());
         h.add(m_count);
@@ -128,7 +128,7 @@ public:
         for (u32 slot : m_free) h.add(slot);
     }
 
-    // ---- 순회: for (auto [id, item] : pool) — 슬롯 순서, 살아 있고 이번 틱에 만들지 않은 항목만
+    // ---- Iteration: for (auto [id, item] : pool) — slot order, only items alive and not created this tick
     template <class Ref>
     struct Entry {
         Id<T> id;
@@ -160,7 +160,7 @@ public:
     Iterator<const Pool, const T&> begin() const { return {this, 0}; }
     Iterator<const Pool, const T&> end() const { return {this, capacity()}; }
 
-    // 필드 선언(MEALKIT_FIELD)에서 쓰는 설명: 해시, 스냅샷, 에디터 상태 보기
+    // Description used by field declarations (MEALKIT_FIELD): hash, snapshots, editor state view
     static const reflect::ContainerOps& reflectOps() {
         static const reflect::ContainerOps ops{
             [](const void* p) { return static_cast<const Pool*>(p)->capacity(); },
@@ -199,7 +199,7 @@ private:
         saveVector(m_dying, w);
     }
     bool load(reflect::ByteReader& r) {
-        // 용량을 미리 잡아 둬서 불러온 뒤에도 틱 도중 할당이 없다
+        // Capacity is reserved up front so there's no mid-tick allocation even after loading
         if (!r.value(m_count) || !loadVector(m_items, r) || !loadVector(m_generations, r) || !loadVector(m_slots, r) ||
             !loadVector(m_free, r) || !loadVector(m_dying, r))
             return false;
@@ -213,7 +213,7 @@ private:
                (m_slots[id.slot] == Slot::New || m_slots[id.slot] == Slot::Alive);
     }
 
-    // 지운 순서와 관계없이 슬롯 순서로 정리한다 (삽입 정렬: 한 틱에 지우는 수는 적다)
+    // Cleans up in slot order regardless of deletion order (insertion sort: few deletions per tick)
     static void sortSlots(std::vector<u32>& slots) {
         for (size_t i = 1; i < slots.size(); ++i) {
             const u32 v = slots[i];
@@ -226,8 +226,8 @@ private:
     std::vector<T> m_items;
     std::vector<u32> m_generations;
     std::vector<Slot> m_slots;
-    std::vector<u32> m_free;  // 다음에 쓸 슬롯이 맨 뒤
-    std::vector<u32> m_dying; // 이번 틱에 지운 슬롯
+    std::vector<u32> m_free;  // the next slot to use is at the back
+    std::vector<u32> m_dying; // slots deleted this tick
     u32 m_count = 0;
 };
 
