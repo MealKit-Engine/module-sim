@@ -27,6 +27,8 @@ struct MatchRules {
     u32 scoreLimit = 0;    // a side reaching this round score wins the round
     bool elimination = false; // the round ends when at most one side has players alive
     u32 teamCount = 0;     // 0 or 1 = free for all (each player is a side); else side = slot % teamCount
+    bool coop = false;     // every player is side 0 against the game: time running out or everyone out (elimination) is a loss
+                           // (roundWinner kNoSide), and the game decides a win itself with finishRound(..., 0)
 };
 
 // One player as seen by the flow this tick (built by the game from its PlayerSlot scoreboard; not state)
@@ -53,8 +55,12 @@ enum class FlowEvent : u8 {
     MatchEnd,       // phase became Results: flow.matchWinner is set
 };
 
-inline u32 matchSide(const MatchRules& rules, u32 slot) { return rules.teamCount > 1 ? slot % rules.teamCount : slot; }
-inline u32 matchSideCount(const MatchRules& rules) { return rules.teamCount > 1 ? rules.teamCount : net::kMaxPlayers; }
+inline u32 matchSide(const MatchRules& rules, u32 slot) {
+    return rules.coop ? 0u : rules.teamCount > 1 ? slot % rules.teamCount : slot;
+}
+inline u32 matchSideCount(const MatchRules& rules) {
+    return rules.coop ? 1u : rules.teamCount > 1 ? rules.teamCount : net::kMaxPlayers;
+}
 
 // The side with the single highest value among present sides (kNoSide on a tie or if none)
 inline u32 bestSide(const std::array<u32, net::kMaxPlayers>& value, const std::array<bool, net::kMaxPlayers>& present, u32 sides) {
@@ -70,6 +76,17 @@ inline u32 bestSide(const std::array<u32, net::kMaxPlayers>& value, const std::a
 
 // Starts the flow at match start (World::reset). Returns the first transition (Countdown or straight into a round).
 inline FlowEvent startMatchFlow(MatchFlow& flow, const MatchRules& rules, u32 tick, std::span<const MatchPlayer> players);
+
+// Ends the round now with a winner the game decided (kNoSide = nobody), e.g. a co-op team reaching the goal. Only while Playing
+// (returns None otherwise); call it from the game's step like the other transitions and handle the returned RoundEnd.
+inline FlowEvent finishRound(MatchFlow& flow, const MatchRules& rules, u32 tick, u32 winner) {
+    if (flow.phase != FlowPhase::Playing) return FlowEvent::None;
+    flow.phase = FlowPhase::RoundEnd;
+    flow.roundWinner = winner < matchSideCount(rules) ? winner : kNoSide;
+    if (flow.roundWinner != kNoSide) ++flow.roundWins[flow.roundWinner];
+    flow.phaseEnd.start(tick, rules.roundEndDelay);
+    return FlowEvent::RoundEnd;
+}
 
 // One tick of the flow. Call at the start of the game's step (after commands).
 inline FlowEvent advanceMatch(MatchFlow& flow, const MatchRules& rules, u32 tick, std::span<const MatchPlayer> players) {
@@ -120,13 +137,10 @@ inline FlowEvent advanceMatch(MatchFlow& flow, const MatchRules& rules, u32 tick
             if (best != kNoSide && score[best] >= rules.scoreLimit) over = true, winner = best;
         }
         if (!over && rules.elimination && aliveSides <= (presentSides > 1 ? 1u : 0u)) over = true, winner = lastAlive;
-        if (!over && rules.roundLength > 0 && flow.phaseEnd.ready(tick)) over = true, winner = bestSide(score, present, sides);
+        if (!over && rules.roundLength > 0 && flow.phaseEnd.ready(tick))
+            over = true, winner = rules.coop ? kNoSide : bestSide(score, present, sides);
         if (!over) return FlowEvent::None;
-        flow.phase = FlowPhase::RoundEnd;
-        flow.roundWinner = winner;
-        if (winner != kNoSide) ++flow.roundWins[winner];
-        flow.phaseEnd.start(tick, rules.roundEndDelay);
-        return FlowEvent::RoundEnd;
+        return finishRound(flow, rules, tick, winner);
     }
     case FlowPhase::RoundEnd: {
         if (!flow.phaseEnd.ready(tick)) return FlowEvent::None;
@@ -137,7 +151,8 @@ inline FlowEvent advanceMatch(MatchFlow& flow, const MatchRules& rules, u32 tick
         std::array<bool, net::kMaxPlayers> any{};
         for (u32 i = 0; i < sides; ++i) any[i] = present[i] || flow.roundWins[i] > 0;
         flow.phase = FlowPhase::Results;
-        flow.matchWinner = bestSide(flow.roundWins, any, sides);
+        // Co-op: the team wins the match with more rounds won than lost
+        flow.matchWinner = rules.coop ? (flow.roundWins[0] * 2 > flow.round ? 0u : kNoSide) : bestSide(flow.roundWins, any, sides);
         return FlowEvent::MatchEnd;
     }
     case FlowPhase::Results: return FlowEvent::None;
