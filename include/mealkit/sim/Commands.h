@@ -3,7 +3,7 @@
 #include "mealkit/core/Hash.h"
 #include "mealkit/core/Reflect.h"
 #include "mealkit/core/Types.h"
-#include "mealkit/net/Lockstep.h"
+#include "mealkit/session/Session.h"
 
 #include <cstring>
 #include <type_traits>
@@ -20,13 +20,13 @@
 //
 // The host decides the tick to apply it on and sends it to everyone with that tick's inputs. Order within a tick is player index → send order.
 // They go into input recordings/rewind/shadow simulation together with inputs. Commands are sent via memcpy, so they only mean the same between identical builds (same as the lockstep premise).
-// Types are distinguished by a hash of the name (4 bytes): one command is type + contents up to net::kMaxCommandBytes.
+// Types are distinguished by a hash of the name (4 bytes): one command is type + contents up to session::kMaxCommandBytes.
 namespace mealkit::sim {
 
 template <class T>
 constexpr void checkCommandType() {
     static_assert(std::is_trivially_copyable_v<T>, "a command is sent with memcpy: no std::string, containers or pointers");
-    static_assert(sizeof(T) + 4 <= net::kMaxCommandBytes, "command too large (net::kMaxCommandBytes)");
+    static_assert(sizeof(T) + 4 <= session::kMaxCommandBytes, "command too large (session::kMaxCommandBytes)");
 }
 
 template <class T>
@@ -57,8 +57,8 @@ struct Command {
 
 // This tick's confirmed commands in order: f(const Command&)
 template <class F>
-void forEachCommand(const net::TickInputs& inputs, F&& f) {
-    net::forEachCommand(inputs, [&](u8 player, const u8* data, u32 size) {
+void forEachCommand(const session::TickInputs& inputs, F&& f) {
+    session::forEachCommand(inputs, [&](u8 player, const u8* data, u32 size) {
         if (size < 4) return;
         Command c;
         c.player = player;
@@ -72,7 +72,7 @@ void forEachCommand(const net::TickInputs& inputs, F&& f) {
 
 // Called by the view side (app/, view/). false if not mid-match (Running) or the queue is full
 template <class T>
-bool sendCommand(net::LockstepSession& session, const T& command) {
+bool sendCommand(session::Session& session, const T& command) {
     const u32 type = commandType<T>();
     u8 buffer[4 + sizeof(T)];
     buffer[0] = static_cast<u8>(type);
@@ -83,7 +83,7 @@ bool sendCommand(net::LockstepSession& session, const T& command) {
     return session.submitCommand(buffer, sizeof(buffer));
 }
 
-// Engine command: a player joined mid-match (first time or again) or disconnected (net::kPresenceCommand, sent by the host).
+// Engine command: a player joined mid-match (first time or again) or disconnected (session::kPresenceCommand, sent by the host).
 // All peers receive it on the same tick. For a new slot the game creates the slot/controller; loadout is that person's match start data (same bytes as game::setLoadout)
 struct Presence {
     u8 player = 0;
@@ -104,7 +104,7 @@ struct Presence {
 };
 
 inline bool readPresence(const Command& c, Presence& out) {
-    if (c.type != static_cast<u32>(fnv1a(net::kPresenceCommand)) || c.size < 1) return false;
+    if (c.type != static_cast<u32>(fnv1a(session::kPresenceCommand)) || c.size < 1) return false;
     out.player = c.player;
     out.connected = c.data[0] != 0;
     out.loadout = c.data + 1;

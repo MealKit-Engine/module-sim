@@ -5,6 +5,6 @@ name sim
 version 0.1.0
 kernel 0.9
 kind sim
-requires net 0.1 physics 0.1
+requires physics 0.1 session 0.1
 tag sim
 summary Simulation tools: Pool, tick events and timers, commands, match flow, movement, ragdoll, nav grid, tables

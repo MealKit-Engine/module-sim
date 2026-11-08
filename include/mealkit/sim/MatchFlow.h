@@ -1,7 +1,7 @@
 #pragma once
 
 #include "mealkit/core/Reflect.h"
-#include "mealkit/net/Lockstep.h"
+#include "mealkit/session/Session.h"
 #include "mealkit/sim/TickTimer.h"
 
 #include <array>
@@ -44,7 +44,7 @@ MEALKIT_STRUCT(MatchFlow) {
     MEALKIT_FIELD(u32, round, 0, "Round (first is 1)");
     MEALKIT_FIELD(u32, roundWinner, kNoSide, "Last round winner (side)");
     MEALKIT_FIELD(u32, matchWinner, kNoSide, "Match winner (side)");
-    MEALKIT_ARRAY(u32, net::kMaxPlayers, roundWins, "Rounds won per side");
+    MEALKIT_ARRAY(u32, session::kMaxPlayers, roundWins, "Rounds won per side");
 };
 
 enum class FlowEvent : u8 {
@@ -59,11 +59,11 @@ inline u32 matchSide(const MatchRules& rules, u32 slot) {
     return rules.coop ? 0u : rules.teamCount > 1 ? slot % rules.teamCount : slot;
 }
 inline u32 matchSideCount(const MatchRules& rules) {
-    return rules.coop ? 1u : rules.teamCount > 1 ? rules.teamCount : net::kMaxPlayers;
+    return rules.coop ? 1u : rules.teamCount > 1 ? rules.teamCount : session::kMaxPlayers;
 }
 
 // The side with the single highest value among present sides (kNoSide on a tie or if none)
-inline u32 bestSide(const std::array<u32, net::kMaxPlayers>& value, const std::array<bool, net::kMaxPlayers>& present, u32 sides) {
+inline u32 bestSide(const std::array<u32, session::kMaxPlayers>& value, const std::array<bool, session::kMaxPlayers>& present, u32 sides) {
     u32 best = kNoSide;
     bool tie = false;
     for (u32 i = 0; i < sides; ++i) {
@@ -91,10 +91,10 @@ inline FlowEvent finishRound(MatchFlow& flow, const MatchRules& rules, u32 tick,
 // One tick of the flow. Call at the start of the game's step (after commands).
 inline FlowEvent advanceMatch(MatchFlow& flow, const MatchRules& rules, u32 tick, std::span<const MatchPlayer> players) {
     const u32 sides = matchSideCount(rules);
-    std::array<u32, net::kMaxPlayers> score{};
-    std::array<bool, net::kMaxPlayers> present{}, alive{};
+    std::array<u32, session::kMaxPlayers> score{};
+    std::array<bool, session::kMaxPlayers> present{}, alive{};
     u32 presentPlayers = 0;
-    for (u32 slot = 0; slot < players.size() && slot < net::kMaxPlayers; ++slot) {
+    for (u32 slot = 0; slot < players.size() && slot < session::kMaxPlayers; ++slot) {
         const MatchPlayer& p = players[slot];
         if (!p.present) continue;
         const u32 side = matchSide(rules, slot);
@@ -148,7 +148,7 @@ inline FlowEvent advanceMatch(MatchFlow& flow, const MatchRules& rules, u32 tick
         u32 most = 0;
         for (u32 i = 0; i < sides; ++i) most = flow.roundWins[i] > most ? flow.roundWins[i] : most;
         if (flow.round < rounds && most * 2 <= rounds) return beginCountdown();
-        std::array<bool, net::kMaxPlayers> any{};
+        std::array<bool, session::kMaxPlayers> any{};
         for (u32 i = 0; i < sides; ++i) any[i] = present[i] || flow.roundWins[i] > 0;
         flow.phase = FlowPhase::Results;
         // Co-op: the team wins the match with more rounds won than lost
