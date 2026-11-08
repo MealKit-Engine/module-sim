@@ -2,9 +2,10 @@
 # requires: modules this folder may include besides the kernel (core, platform, jobs), as name minVersion.
 @format engine-module 1
 name sim
-version 0.1.0
+version 0.1.1
 kernel 0.9
 kind sim
+layer core
 requires physics 0.1 session 0.1
 tag sim
 summary Simulation tools: Pool, tick events and timers, commands, match flow, movement, ragdoll, nav grid, tables
