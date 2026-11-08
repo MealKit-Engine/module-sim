@@ -2,6 +2,7 @@
 
 #include "mealkit/core/Hash.h"
 #include "mealkit/core/Log.h"
+#include "mealkit/core/Memory.h"
 #include "mealkit/core/Reflect.h"
 
 #include <type_traits>
@@ -18,6 +19,13 @@
 // Determinism: iteration is in slot order, and empty slots are reused in a fixed order. Slot state (generations, free list) goes into
 // World::hash() via hashState(), and the game adds item fields one by one itself (so struct padding doesn't mix in).
 namespace mealkit::sim {
+
+// Pool storage is counted under the memory tag "sim" (core/Memory.h). A stateless allocator, so Pools copy, save and hash as before
+struct PoolMemoryTag {
+    static constexpr const char* kName = "sim";
+};
+template <class V>
+using PoolVector = std::vector<V, mem::Allocator<V, PoolMemoryTag>>;
 
 // Pool<T> item id. generation 0 is invalid (slot generations start at 1).
 template <class T>
@@ -59,7 +67,7 @@ public:
         m_items.resize(capacity, T{});
         m_generations.resize(capacity, 1u);
         m_slots.resize(capacity, Slot::Free);
-        std::vector<u32> free;
+        PoolVector<u32> free;
         free.reserve(capacity);
         for (u32 i = capacity; i > old; --i) free.push_back(i - 1);
         free.insert(free.end(), m_free.begin(), m_free.end());
@@ -179,12 +187,12 @@ public:
 
 private:
     template <class V>
-    static void saveVector(const std::vector<V>& v, reflect::ByteWriter& w) {
+    static void saveVector(const PoolVector<V>& v, reflect::ByteWriter& w) {
         w.value(static_cast<u32>(v.size()));
         if (!v.empty()) w.bytes(v.data(), v.size() * sizeof(V));
     }
     template <class V>
-    static bool loadVector(std::vector<V>& v, reflect::ByteReader& r) {
+    static bool loadVector(PoolVector<V>& v, reflect::ByteReader& r) {
         u32 n = 0;
         if (!r.value(n)) return false;
         v.resize(n);
@@ -214,7 +222,7 @@ private:
     }
 
     // Cleans up in slot order regardless of deletion order (insertion sort: few deletions per tick)
-    static void sortSlots(std::vector<u32>& slots) {
+    static void sortSlots(PoolVector<u32>& slots) {
         for (size_t i = 1; i < slots.size(); ++i) {
             const u32 v = slots[i];
             size_t j = i;
@@ -223,11 +231,11 @@ private:
         }
     }
 
-    std::vector<T> m_items;
-    std::vector<u32> m_generations;
-    std::vector<Slot> m_slots;
-    std::vector<u32> m_free;  // the next slot to use is at the back
-    std::vector<u32> m_dying; // slots deleted this tick
+    PoolVector<T> m_items;
+    PoolVector<u32> m_generations;
+    PoolVector<Slot> m_slots;
+    PoolVector<u32> m_free;  // the next slot to use is at the back
+    PoolVector<u32> m_dying; // slots deleted this tick
     u32 m_count = 0;
 };
 
