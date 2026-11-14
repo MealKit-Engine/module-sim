@@ -3,10 +3,10 @@
 @format module 1
 type engine
 name sim
-version 0.1.2
+version 0.2.0
 engine 0.9
 kind sim
 layer core
 requires physics 0.1 session 0.1
 tags sim
-summary Simulation tools: Pool, tick events and timers, commands, match flow, movement, ragdoll, nav grid, tables
+summary Simulation tools: Pool, tick events and timers, commands, movement, ragdoll, nav grid, tables
